@@ -11,8 +11,8 @@ from utils import get_difficulty, calculate_metrics
 # ==========================================
 device = "cuda" if torch.cuda.is_available() else "cpu"
 GUIDANCE_SCALE = 20.0  # 이 값을 조절하며 실험해보세요 (10 ~ 100)
-NUM_TESTS = 100        # 테스트할 문제 개수
-NUM_LANGEVIN_STEPS = 5  # 스텝당 5번 반복 수정
+NUM_TESTS = 10        # 테스트할 문제 개수
+NUM_LANGEVIN_STEPS = 20  # 스텝당 랑주뱅 반복 횟수
 STEP_SIZE = 0.2  # Langevin step 크기
 
 # 앞서 학습에 사용한 Beta Schedule 가져오기
@@ -107,7 +107,7 @@ def compute_energy(x, clues, mask):
     # Sum은 기본 골격, Ortho는 충돌 방지, Entropy는 마무리 결정
     
     # Ortho는 값이(9x9 sum) 커질 수 있으므로 scale을 좀 낮춰줌
-    total_energy = loss_sum + (1.5 * loss_ortho) + (0.01 * entropy)
+    total_energy = loss_sum + (2.0 * loss_ortho) + (0.01 * entropy)
     
     return total_energy
 
@@ -232,7 +232,7 @@ dataset = load_dataset("Ritvik19/Sudoku-Dataset", split=f"train[:{NUM_TESTS}]")
 # 모델 로드 (학습된 가중치)
 model = SudokuNet().to(device)
 try:
-    model.load_state_dict(torch.load("sudoku_diffusion.pth"))
+    model.load_state_dict(torch.load("sudoku_diffusion_best.pth"))
     print("모델 가중치 로드 성공!")
 except:
     print("경고: 저장된 모델이 없습니다. 랜덤 가중치로 실행됩니다.")
@@ -278,7 +278,8 @@ for i, item in enumerate(dataset):
         print("Quiz:\n", np.array([int(c) for c in quiz_str]).reshape(9,9))
         print("Pred:\n", pred_grid)
         print("GT  :\n", gt_grid)
-        print(f"Difficulty: {diff_label} | Clues: {clue_count} | Success: {is_success} | Blank Acc: {blank_acc*100:.2f}%")
+
+    print(f"Difficulty: {diff_label} | Clues: {clue_count} | Success: {is_success} | Blank Acc: {blank_acc*100:.2f}%")
 
 
 print("\n" + "="*60)
@@ -299,3 +300,6 @@ for label in order:
     avg_blank_acc = (data["blank_acc_sum"] / count) * 100
     
     print(f"{label:<10} | {count:<5} | {success_rate:>11.2f}% | {avg_blank_acc:>14.2f}%")
+
+print("="*60 + "\n")
+print(f"parameters: GUIDANCE_SCALE={GUIDANCE_SCALE}, NUM_LANGEVIN_STEPS={NUM_LANGEVIN_STEPS}, STEP_SIZE={STEP_SIZE}\n")
