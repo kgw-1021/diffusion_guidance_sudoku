@@ -233,7 +233,7 @@ for i, item in enumerate(dataset):
     clues, mask, _ = str_to_tensor(quiz_str)
     
     # [수정] 첫 번째 문제만 Debug 모드 활성화하여 상세 분석
-    is_debug = (i == 0) 
+    is_debug = (i == 1) 
     
     output = solve_sudoku(
         model, clues, mask, 
@@ -268,7 +268,7 @@ for i, item in enumerate(dataset):
         print(f"\n[Problem {i+1}]")
         print("Quiz:\n", np.array([int(c) for c in quiz_str]).reshape(9,9))
         print("Pred:\n", pred_grid)
-        # print("GT  :\n", gt_grid)
+        print("GT  :\n", gt_grid)
 
     print(f"Difficulty: {diff_label} | Clues: {clue_count} | Success: {is_success} | Blank Acc: {blank_acc*100:.2f}%")
 
