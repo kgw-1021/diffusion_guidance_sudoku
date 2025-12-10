@@ -14,8 +14,8 @@ import seaborn as sns
 device = "cuda" if torch.cuda.is_available() else "cpu"
 GUIDANCE_SCALE = 20.0 
 NUM_TESTS = 10        
-NUM_LANGEVIN_STEPS = 20  
-STEP_SIZE = 0.2  
+NUM_LANGEVIN_STEPS = 50  
+STEP_SIZE = 0.05  
 
 # Beta Schedule
 T = 1000
@@ -72,7 +72,7 @@ def compute_energy(x, clues, mask):
     entropy = -torch.sum(probs * torch.log(probs + epsilon))
     
     # Weighting
-    total_energy = loss_sum + (2.0 * loss_ortho) + (0.01 * entropy)
+    total_energy = loss_sum + (30.0 * loss_ortho) + (0.01 * entropy)
     
     return total_energy
 
@@ -82,91 +82,107 @@ def compute_energy(x, clues, mask):
 @torch.no_grad()
 def solve_sudoku(model, clues, mask, 
                  guidance_scale=20.0,    
-                 langevin_steps=5,       
-                 langevin_lr=0.2,
-                 debug=False): # <--- [수정] Debug 플래그 추가
-    """
-    debug=True일 경우 에너지 기록과 충돌 맵 스냅샷을 반환합니다.
-    """
+                 langevin_steps=50,       
+                 langevin_lr=0.05, 
+                 debug=False):
+
     model.eval()
     device = next(model.parameters()).device
-    
     x_t = torch.randn_like(clues).to(device)
     
-    # 분석 데이터 저장소
-    history = {
-        "energy_trace": [],
-        "conflict_maps": [] # (t, grid_map) 튜플 저장
-    }
+    # -----------------------------------------------------------
+    # [추가] 최적의 해를 저장할 변수 초기화
+    # -----------------------------------------------------------
+    best_loss = float('inf')
+    best_x = x_t.clone()
     
+    if debug:
+        history = {"energy_trace": [], "conflict_maps": []}
+
     pbar = tqdm(reversed(range(T)), total=T, leave=False, desc="Solving Sudoku")
     
     for t in pbar:
-        # A. Replacement (1차)
+        # A. Start Point
         alpha_bar = alphas_cumprod[t]
         noise = torch.randn_like(clues)
         clues_input = clues * 2.0 - 1.0
         noisy_clues = torch.sqrt(alpha_bar) * clues_input + torch.sqrt(1 - alpha_bar) * noise
+        
+        # 초기화
         x_t = mask * noisy_clues + (1 - mask) * x_t
 
         # B. Langevin Dynamics (Inner Loop)
-        t_tensor = torch.tensor([t], device=device).long()
-        
         for k in range(langevin_steps):
             with torch.enable_grad():
                 x_t = x_t.detach().requires_grad_(True)
                 
-                loss = compute_energy(x_t, clues, mask) 
+                loss_energy = compute_energy(x_t, clues, mask)
+                loss_clue = torch.sum(mask * (x_t - noisy_clues)**2)
+                loss = loss_energy + (100.0 * loss_clue) 
                 
-                # --- [추가] Debug깅: 에너지 기록 ---
-                if debug:
-                    history["energy_trace"].append(loss.item())
-                
+                # -------------------------------------------------------
+                # [핵심 수정] 현재 에너지가 역대 최저라면 저장 (Best-Keep)
+                # -------------------------------------------------------
+                current_loss_val = loss.item()
+                if current_loss_val < best_loss:
+                    best_loss = current_loss_val
+                    best_x = x_t.detach().clone() # 현재 상태 복제 저장
+                    # (옵션) 진행바에 현재 베스트 갱신 알림
+                    # pbar.set_postfix({'MinLoss': f"{best_loss:.2f}"})
+
+                if debug: history["energy_trace"].append(current_loss_val)
                 grad = torch.autograd.grad(loss, x_t)[0]
-                
-                # --- [추가] Debug깅: Conflict Map (Gradient Magnitude) ---
-                # 특정 시점(예: 100스텝마다)의 Langevin 시작점(k=0)을 저장
-                if debug and k == 0 and (t % 200 == 0 or t < 50): 
-                    # Gradient의 크기(L2 Norm or Mean Abs)를 각 픽셀별로 계산
-                    # (Batch, 9, 9, 9) -> (9, 9)
-                    # 채널 방향(dim=1)으로 합쳐서, 해당 셀이 얼마나 압력을 받고 있는지 계산
-                    grad_mag = grad[0].abs().mean(dim=0).cpu().numpy()
-                    history["conflict_maps"].append((t, grad_mag))
+
+            # 정석 랑주뱅 노이즈
+            noise = torch   .randn_like(x_t)
+            noise_scale = torch.sqrt(torch.tensor(2 * langevin_lr, device=device))
+            if t < 200: noise_scale *= 0.1
 
             # Update
-            x_t = x_t - (guidance_scale * langevin_lr * grad)
+            x_t = x_t - (guidance_scale * langevin_lr * grad) + (noise_scale * noise)
             
-            # Replacement (2차)
+            # Clipping
+            x_t = torch.clamp(x_t, -1.0, 1.0)
+
+            # Loop 내부 Hard Replacement
             x_t = mask * noisy_clues + (1 - mask) * x_t
 
         # C. Reverse Diffusion Step
         with torch.no_grad():
+            t_tensor = torch.tensor([t], device=device).long()
             noise_pred = model(x_t, t_tensor)
             
             alpha = alphas[t]
             beta = betas[t]
-            
-            if t > 0:
-                z = torch.randn_like(x_t)
-            else:
-                z = 0
+            if t > 0: z = torch.randn_like(x_t)
+            else: z = 0
             
             coeff1 = 1 / torch.sqrt(alpha)
             coeff2 = (1 - alpha) / (torch.sqrt(1 - alpha_bar))
             x_prev = coeff1 * (x_t - coeff2 * noise_pred) + torch.sqrt(beta) * z
             x_t = x_prev
 
-    # Final Post-Processing
-    final_logits = x_t.clone()
+    # -----------------------------------------------------------
+    # [수정] 최종 결과 생성 시 'best_x' 사용
+    # 마지막 x_t 대신, 도중에 찾았던 가장 에너지가 낮은 best_x를 사용
+    # -----------------------------------------------------------
+    print(f"  >> Best Loss found during trajectory: {best_loss:.4f}")
+    
+    # 힌트 부분은 원본(clues)으로 완벽하게 교체 (노이즈 없는 원본)
+    # best_x는 확률 분포 상태이므로, 힌트 부분만 강력하게 덮어씀
+    final_logits = best_x.clone()
+    
     large_val = 100.0
     hint_logits = clues * large_val + (1 - clues) * (-large_val)
+    
+    # 힌트 위치는 hint_logits, 빈칸 위치는 best_x의 logits 사용
     final_output = mask * hint_logits + (1 - mask) * final_logits
     
     pred_grid = torch.argmax(final_output, dim=1).cpu().numpy().squeeze() + 1
-    
-    if debug:
+
+    if debug: 
         return pred_grid, history
-    else:
+    else: 
         return pred_grid
 
 # ==========================================
@@ -232,8 +248,9 @@ for i, item in enumerate(dataset):
     
     clues, mask, _ = str_to_tensor(quiz_str)
     
+
     # [수정] 첫 번째 문제만 Debug 모드 활성화하여 상세 분석
-    is_debug = (i == 1) 
+    is_debug = False
     
     output = solve_sudoku(
         model, clues, mask, 
@@ -264,11 +281,11 @@ for i, item in enumerate(dataset):
         results["Overall"]["success"] += 1
     results["Overall"]["blank_acc_sum"] += blank_acc
     
-    if i < 3:
-        print(f"\n[Problem {i+1}]")
-        print("Quiz:\n", np.array([int(c) for c in quiz_str]).reshape(9,9))
-        print("Pred:\n", pred_grid)
-        print("GT  :\n", gt_grid)
+    # if i < 3:
+    print(f"\n[Problem {i+1}]")
+    print("Quiz:\n", np.array([int(c) for c in quiz_str]).reshape(9,9))
+    print("Pred:\n", pred_grid)
+    print("GT  :\n", gt_grid)
 
     print(f"Difficulty: {diff_label} | Clues: {clue_count} | Success: {is_success} | Blank Acc: {blank_acc*100:.2f}%")
 
