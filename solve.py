@@ -120,9 +120,6 @@ def solve_sudoku(model, clues, mask,
                 loss_clue = torch.sum(mask * (x_t - noisy_clues)**2)
                 loss = loss_energy + (100.0 * loss_clue) 
                 
-                # -------------------------------------------------------
-                # [핵심 수정] 현재 에너지가 역대 최저라면 저장 (Best-Keep)
-                # -------------------------------------------------------
                 current_loss_val = loss.item()
                 if current_loss_val < best_loss:
                     best_loss = current_loss_val
@@ -162,10 +159,7 @@ def solve_sudoku(model, clues, mask,
             x_prev = coeff1 * (x_t - coeff2 * noise_pred) + torch.sqrt(beta) * z
             x_t = x_prev
 
-    # -----------------------------------------------------------
-    # [수정] 최종 결과 생성 시 'best_x' 사용
-    # 마지막 x_t 대신, 도중에 찾았던 가장 에너지가 낮은 best_x를 사용
-    # -----------------------------------------------------------
+
     print(f"  >> Best Loss found during trajectory: {best_loss:.4f}")
     
     # 힌트 부분은 원본(clues)으로 완벽하게 교체 (노이즈 없는 원본)
@@ -248,8 +242,6 @@ for i, item in enumerate(dataset):
     
     clues, mask, _ = str_to_tensor(quiz_str)
     
-
-    # [수정] 첫 번째 문제만 Debug 모드 활성화하여 상세 분석
     is_debug = False
     
     output = solve_sudoku(
