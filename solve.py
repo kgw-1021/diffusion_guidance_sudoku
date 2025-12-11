@@ -12,10 +12,12 @@ import seaborn as sns
 # 1. 설정 및 도구 함수
 # ==========================================
 device = "cuda" if torch.cuda.is_available() else "cpu"
+print("Using device:", device)
+
 GUIDANCE_SCALE = 20.0 
-NUM_TESTS = 10        
+NUM_TESTS = 100        
 NUM_LANGEVIN_STEPS = 50  
-STEP_SIZE = 0.05  
+STEP_SIZE = 0.1  
 
 # Beta Schedule
 T = 1000
@@ -273,11 +275,11 @@ for i, item in enumerate(dataset):
         results["Overall"]["success"] += 1
     results["Overall"]["blank_acc_sum"] += blank_acc
     
-    # if i < 3:
-    print(f"\n[Problem {i+1}]")
-    print("Quiz:\n", np.array([int(c) for c in quiz_str]).reshape(9,9))
-    print("Pred:\n", pred_grid)
-    print("GT  :\n", gt_grid)
+    if 10 < i and  i < 13:
+        print(f"\n[Problem {i+1}]")
+        print("Quiz:\n", np.array([int(c) for c in quiz_str]).reshape(9,9))
+        print("Pred:\n", pred_grid)
+        print("GT  :\n", gt_grid)
 
     print(f"Difficulty: {diff_label} | Clues: {clue_count} | Success: {is_success} | Blank Acc: {blank_acc*100:.2f}%")
 
